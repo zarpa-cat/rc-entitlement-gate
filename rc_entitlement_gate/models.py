@@ -16,6 +16,7 @@ class EntitlementStatus(str, Enum):  # noqa: UP042 — StrEnum not available in 
     DENIED = "denied"
     NOT_FOUND = "not_found"  # subscriber not found in RC
     ERROR = "error"  # upstream failure
+    STALE = "stale"  # served from stale cache during offline fallback
 
 
 class Entitlement(BaseModel):
@@ -51,8 +52,12 @@ class CheckResult(BaseModel):
     granted: bool
     entitlement_detail: Entitlement | None = None
     cached: bool = False
+    stale: bool = False  # True when served from stale cache (offline fallback)
     error_message: str | None = None
     checked_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    # Expiry warning fields (populated when expires_soon_threshold_seconds is set on client)
+    expires_soon: bool = False
+    expires_in_seconds: int | None = None
 
     def __bool__(self) -> bool:
         return self.granted

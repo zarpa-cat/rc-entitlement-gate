@@ -4,6 +4,7 @@ Commands:
   entgate check <subscriber_id> <entitlement>   Check single entitlement
   entgate info <subscriber_id>                  Show subscriber summary
   entgate batch <entitlement> --ids a,b,c       Check multiple subscribers
+  entgate webhook-server                         Run webhook invalidation server
 """
 
 from __future__ import annotations
@@ -16,6 +17,7 @@ import typer
 
 from .client import RCEntitlementClient
 from .models import EntitlementStatus
+from .webhook_server import create_app
 
 app = typer.Typer(
     name="entgate",
@@ -130,6 +132,48 @@ def cmd_batch(
 
     all_granted = all(r.granted for r in results)
     raise typer.Exit(0 if all_granted else 1)
+
+
+@app.command("webhook-server")
+def cmd_webhook_server(
+    api_key: _API_KEY_OPT = None,
+    cache_ttl: _CACHE_TTL_OPT = 300,
+    auth_token: Annotated[
+        str | None,
+        typer.Option("--auth-token", envvar="WEBHOOK_AUTH_TOKEN", help="Bearer token for auth"),
+    ] = None,
+    host: Annotated[str, typer.Option("--host", help="Bind host")] = "0.0.0.0",
+    port: Annotated[int, typer.Option("--port", "-p", help="Bind port")] = 8080,
+    stale_window: Annotated[
+        int, typer.Option("--stale-window", help="Stale cache window in seconds")
+    ] = 300,
+) -> None:
+    """Run a webhook server that invalidates entitlement cache on RC events.
+
+    Set as your RC webhook endpoint URL (POST /webhook).
+    Optionally pass --auth-token to require a Bearer token.
+    """
+    import uvicorn
+
+    key = api_key or os.environ.get("REVENUECAT_API_KEY", "")
+    if not key:
+        typer.echo(
+            "Error: REVENUECAT_API_KEY not set. Pass --api-key or set the env var.", err=True
+        )
+        raise typer.Exit(1)
+
+    rc_client = RCEntitlementClient(
+        api_key=key, cache_ttl=cache_ttl, stale_window_seconds=stale_window
+    )
+    fastapi_app = create_app(rc_client=rc_client, auth_token=auth_token)
+
+    typer.echo(f"Starting webhook server on {host}:{port}")
+    if auth_token:
+        typer.echo("Auth: Bearer token required")
+    else:
+        typer.echo("Auth: none (open)")
+
+    uvicorn.run(fastapi_app, host=host, port=port)
 
 
 def main() -> None:

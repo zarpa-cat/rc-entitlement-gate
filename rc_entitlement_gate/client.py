@@ -3,11 +3,17 @@
 Thin wrapper around the RC REST API v1. Only fetches subscriber data —
 no write operations. Cache-aware: results are stored in TTLCache to
 minimize RC API calls.
+
+Phase 2 additions:
+- offline_fallback: serve stale cache when RC API is unreachable
+- expires_soon_threshold_seconds: flag entitlements expiring soon
+- stale_window_seconds: how long to keep expired cache for fallback
 """
 
 from __future__ import annotations
 
 import os
+from datetime import UTC, datetime
 from typing import Any
 
 import httpx
@@ -40,15 +46,20 @@ class RCEntitlementClient:
         cache_ttl: int = 60,
         timeout: float = DEFAULT_TIMEOUT,
         base_url: str = RC_API_BASE,
+        offline_fallback: bool = False,
+        stale_window_seconds: int = 300,
+        expires_soon_threshold_seconds: int = 0,
     ) -> None:
         self.api_key = api_key or os.environ.get("REVENUECAT_API_KEY", "")
         if not self.api_key:
             raise ValueError(
                 "RevenueCat API key required. Pass api_key= or set REVENUECAT_API_KEY env var."
             )
-        self.cache = TTLCache(ttl_seconds=cache_ttl)
+        self.cache = TTLCache(ttl_seconds=cache_ttl, stale_window_seconds=stale_window_seconds)
         self.timeout = timeout
         self.base_url = base_url.rstrip("/")
+        self.offline_fallback = offline_fallback
+        self.expires_soon_threshold_seconds = expires_soon_threshold_seconds
         self._http = httpx.Client(
             headers={
                 "Authorization": f"Bearer {self.api_key}",
@@ -86,19 +97,17 @@ class RCEntitlementClient:
                     granted=False,
                     error_message="Subscriber not found in RevenueCat",
                 )
-            return CheckResult(
-                status=EntitlementStatus.ERROR,
+            return self._handle_fetch_failure(
                 subscriber_id=subscriber_id,
                 entitlement=entitlement,
-                granted=False,
+                cache_key=cache_key,
                 error_message=f"RC API error {e.response.status_code}: {e.response.text[:200]}",
             )
         except Exception as e:  # noqa: BLE001
-            return CheckResult(
-                status=EntitlementStatus.ERROR,
+            return self._handle_fetch_failure(
                 subscriber_id=subscriber_id,
                 entitlement=entitlement,
-                granted=False,
+                cache_key=cache_key,
                 error_message=str(e),
             )
 
@@ -143,18 +152,50 @@ class RCEntitlementClient:
         resp.raise_for_status()
         return resp.json()
 
+    def _handle_fetch_failure(
+        self,
+        subscriber_id: str,
+        entitlement: str,
+        cache_key: str,
+        error_message: str,
+    ) -> CheckResult:
+        """On fetch failure, try stale fallback if configured; else return ERROR."""
+        if self.offline_fallback:
+            stale_data = self.cache.get_stale(cache_key)
+            if stale_data is not None:
+                result = self._build_result(
+                    subscriber_id=subscriber_id,
+                    entitlement=entitlement,
+                    rc_data=stale_data,
+                    cached=True,
+                    stale=True,
+                )
+                result.status = EntitlementStatus.STALE
+                result.error_message = f"Stale cache (offline fallback): {error_message}"
+                return result
+
+        return CheckResult(
+            status=EntitlementStatus.ERROR,
+            subscriber_id=subscriber_id,
+            entitlement=entitlement,
+            granted=False,
+            error_message=error_message,
+        )
+
     def _build_result(
         self,
         subscriber_id: str,
         entitlement: str,
         rc_data: dict[str, Any],
         cached: bool,
+        stale: bool = False,
     ) -> CheckResult:
         subscriber = rc_data.get("subscriber", {})
         entitlements: dict[str, Any] = subscriber.get("entitlements", {})
 
         if entitlement in entitlements:
             ent_detail = Entitlement.from_rc_dict(entitlements[entitlement])
+            expires_soon, expires_in_seconds = self._check_expiry(ent_detail)
             return CheckResult(
                 status=EntitlementStatus.GRANTED,
                 subscriber_id=subscriber_id,
@@ -162,6 +203,9 @@ class RCEntitlementClient:
                 granted=True,
                 entitlement_detail=ent_detail,
                 cached=cached,
+                stale=stale,
+                expires_soon=expires_soon,
+                expires_in_seconds=expires_in_seconds,
             )
 
         return CheckResult(
@@ -170,7 +214,20 @@ class RCEntitlementClient:
             entitlement=entitlement,
             granted=False,
             cached=cached,
+            stale=stale,
         )
+
+    def _check_expiry(self, ent: Entitlement) -> tuple[bool, int | None]:
+        """Returns (expires_soon, expires_in_seconds) based on threshold config."""
+        if not self.expires_soon_threshold_seconds or ent.expires_date is None:
+            return False, None
+        now = datetime.now(UTC)
+        delta = (ent.expires_date - now).total_seconds()
+        if delta < 0:
+            return False, None  # already expired (shouldn't happen with active entitlements)
+        if delta < self.expires_soon_threshold_seconds:
+            return True, int(delta)
+        return False, None
 
     def close(self) -> None:
         self._http.close()
