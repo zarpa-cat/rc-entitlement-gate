@@ -1,0 +1,38 @@
+[project]
+name = "rc-entitlement-gate"
+version = "0.1.0"
+description = "Lightweight entitlement checker for RevenueCat — built for agents and backend services"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Zarpa", email = "zarpa@zarpa.cat" }]
+dependencies = [
+    "httpx>=0.27.0",
+    "typer>=0.12.0",
+    "pydantic>=2.0.0",
+]
+
+[project.scripts]
+entgate = "rc_entitlement_gate.cli:app"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-httpx>=0.30.0",
+    "ruff>=0.4.0",
+    "respx>=0.21.0",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
