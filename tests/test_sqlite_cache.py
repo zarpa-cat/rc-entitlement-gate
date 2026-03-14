@@ -165,3 +165,81 @@ def test_stores_nested_dict(tmp_cache: SQLiteCache) -> None:
     tmp_cache.set("sub:user1", data)
     result = tmp_cache.get("sub:user1")
     assert result == data
+
+
+# ------------------------------------------------------------------
+# Distributed invalidation
+# ------------------------------------------------------------------
+
+
+def test_poll_invalidations_empty(tmp_cache: SQLiteCache) -> None:
+    since = time.time()
+    assert tmp_cache.poll_invalidations(since) == []
+
+
+def test_poll_invalidations_after_invalidate(tmp_path: Path) -> None:
+    db = tmp_path / "shared.db"
+    c1 = SQLiteCache(db_path=db, ttl_seconds=60)
+    c2 = SQLiteCache(db_path=db, ttl_seconds=60)
+
+    since = time.time() - 0.001  # slightly before
+    c1.set("sub:user1", {"data": 1})
+    c1.invalidate("sub:user1")
+
+    keys = c2.poll_invalidations(since)
+    assert "sub:user1" in keys
+
+    c1.close()
+    c2.close()
+
+
+def test_poll_invalidations_only_returns_since(tmp_path: Path) -> None:
+    db = tmp_path / "shared2.db"
+    c = SQLiteCache(db_path=db, ttl_seconds=60)
+
+    c.set("sub:a", {"x": 1})
+    c.invalidate("sub:a")
+
+    since = time.time()
+    time.sleep(0.01)
+
+    c.set("sub:b", {"x": 2})
+    c.invalidate("sub:b")
+
+    keys = c.poll_invalidations(since)
+    assert "sub:b" in keys
+    assert "sub:a" not in keys
+
+    c.close()
+
+
+def test_poll_invalidations_missing_key_still_logged(tmp_path: Path) -> None:
+    """Invalidating a key not in cache still logs it for other processes."""
+    db = tmp_path / "shared3.db"
+    c = SQLiteCache(db_path=db, ttl_seconds=60)
+
+    since = time.time() - 0.001
+    existed = c.invalidate("sub:ghost")
+    assert existed is False  # was not in cache
+
+    keys = c.poll_invalidations(since)
+    assert "sub:ghost" in keys
+    c.close()
+
+
+def test_prune_invalidation_log(tmp_path: Path) -> None:
+    db = tmp_path / "prune.db"
+    c = SQLiteCache(db_path=db, ttl_seconds=60)
+
+    since = time.time() - 0.001
+    c.invalidate("sub:old")
+    keys_before = c.poll_invalidations(since)
+    assert "sub:old" in keys_before
+
+    # Prune everything older than 0 seconds (i.e., everything)
+    pruned = c.prune_invalidation_log(older_than_seconds=0)
+    assert pruned > 0
+
+    keys_after = c.poll_invalidations(since)
+    assert keys_after == []
+    c.close()

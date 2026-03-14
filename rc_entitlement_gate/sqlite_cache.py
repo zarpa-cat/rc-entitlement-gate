@@ -9,6 +9,17 @@ Usage:
     cache = SQLiteCache(db_path="entgate_cache.db", ttl_seconds=60)
 
 Phase 3 feature.
+
+Distributed invalidation (Phase 3b):
+    Multiple processes sharing the same SQLite file can use poll_invalidations()
+    to discover keys invalidated by peer processes and evict them locally:
+
+        bus = SQLiteCache(db_path="/shared/entgate.db")
+        last_sync = time.time()
+        # ... later, on a timer or before each check:
+        for key in bus.poll_invalidations(since_ts=last_sync):
+            local_cache.invalidate(key)
+        last_sync = time.time()
 """
 
 from __future__ import annotations
@@ -31,6 +42,21 @@ CREATE TABLE IF NOT EXISTS entgate_cache (
 
 _CREATE_INDEX = """
 CREATE INDEX IF NOT EXISTS idx_expires_at ON entgate_cache (expires_at)
+"""
+
+# Distributed invalidation log — records cache-key invalidations across processes.
+# Other processes sharing the same DB can call poll_invalidations(since_ts) to pick
+# up keys they should evict from their own (potentially in-memory) caches.
+_CREATE_INVAL_TABLE = """
+CREATE TABLE IF NOT EXISTS entgate_invalidations (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    key           TEXT    NOT NULL,
+    invalidated_at REAL   NOT NULL
+)
+"""
+
+_CREATE_INVAL_INDEX = """
+CREATE INDEX IF NOT EXISTS idx_inval_at ON entgate_invalidations (invalidated_at)
 """
 
 
@@ -75,6 +101,8 @@ class SQLiteCache:
         conn = self._conn()
         conn.execute(_CREATE_TABLE)
         conn.execute(_CREATE_INDEX)
+        conn.execute(_CREATE_INVAL_TABLE)
+        conn.execute(_CREATE_INVAL_INDEX)
         conn.commit()
 
     # ------------------------------------------------------------------
@@ -142,11 +170,55 @@ class SQLiteCache:
             self._conn().commit()
 
     def invalidate(self, key: str) -> bool:
-        """Remove key. Returns True if it existed."""
+        """Remove key and log the invalidation for distributed sync. Returns True if it existed."""
+        now = time.time()
         with self._lock:
             cursor = self._conn().execute("DELETE FROM entgate_cache WHERE key = ?", (key,))
+            # Always log the invalidation — even if not present locally, other processes
+            # sharing this DB may have the key cached and need to evict it.
+            self._conn().execute(
+                "INSERT INTO entgate_invalidations (key, invalidated_at) VALUES (?, ?)",
+                (key, now),
+            )
             self._conn().commit()
             return cursor.rowcount > 0
+
+    def poll_invalidations(self, since_ts: float) -> list[str]:
+        """Return keys invalidated after since_ts (Unix timestamp).
+
+        Use this for distributed invalidation: processes sharing the same SQLite
+        file can poll for keys they should evict from their own local caches.
+
+        Example (multi-process):
+            bus = SQLiteCache(db_path="/shared/entgate.db")
+            last_sync = time.time()
+            ...
+            keys = bus.poll_invalidations(since_ts=last_sync)
+            last_sync = time.time()
+            for key in keys:
+                local_memory_cache.invalidate(key)
+        """
+        with self._lock:
+            rows = (
+                self._conn()
+                .execute(
+                    "SELECT DISTINCT key FROM entgate_invalidations WHERE invalidated_at > ?",
+                    (since_ts,),
+                )
+                .fetchall()
+            )
+        return [row[0] for row in rows]
+
+    def prune_invalidation_log(self, older_than_seconds: int = 3600) -> int:
+        """Remove old invalidation log entries. Returns count deleted."""
+        cutoff = time.time() - older_than_seconds
+        with self._lock:
+            cursor = self._conn().execute(
+                "DELETE FROM entgate_invalidations WHERE invalidated_at < ?",
+                (cutoff,),
+            )
+            self._conn().commit()
+        return cursor.rowcount
 
     def clear(self) -> None:
         with self._lock:

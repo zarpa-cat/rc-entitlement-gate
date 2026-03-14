@@ -58,6 +58,10 @@ class CheckResult(BaseModel):
     # Expiry warning fields (populated when expires_soon_threshold_seconds is set on client)
     expires_soon: bool = False
     expires_in_seconds: int | None = None
+    # Grace period fields (RC billing issues — entitlement still granted but payment failed)
+    in_grace_period: bool = False
+    grace_period_expires_date: datetime | None = None
+    billing_issues_detected_at: datetime | None = None
 
     def __bool__(self) -> bool:
         return self.granted

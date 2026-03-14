@@ -12,6 +12,11 @@ Phase 2 additions:
 Phase 3 additions:
 - cache_backend: "memory" (default) or "sqlite" for persistent cache
 - cache_db_path: path to SQLite database file (only used when cache_backend="sqlite")
+
+Phase 3b additions:
+- Grace period passthrough: GRANTED results include in_grace_period, grace_period_expires_date,
+  billing_issues_detected_at when RC returns billing-issue subscription data.
+- Distributed invalidation: SQLiteCache supports poll_invalidations() for multi-process setups.
 """
 
 from __future__ import annotations
@@ -212,6 +217,9 @@ class RCEntitlementClient:
         if entitlement in entitlements:
             ent_detail = Entitlement.from_rc_dict(entitlements[entitlement])
             expires_soon, expires_in_seconds = self._check_expiry(ent_detail)
+            in_grace, grace_expires, billing_issues_at = self._check_grace_period(
+                ent_detail, subscriber
+            )
             return CheckResult(
                 status=EntitlementStatus.GRANTED,
                 subscriber_id=subscriber_id,
@@ -222,6 +230,9 @@ class RCEntitlementClient:
                 stale=stale,
                 expires_soon=expires_soon,
                 expires_in_seconds=expires_in_seconds,
+                in_grace_period=in_grace,
+                grace_period_expires_date=grace_expires,
+                billing_issues_detected_at=billing_issues_at,
             )
 
         return CheckResult(
@@ -244,6 +255,38 @@ class RCEntitlementClient:
         if delta < self.expires_soon_threshold_seconds:
             return True, int(delta)
         return False, None
+
+    def _check_grace_period(
+        self,
+        ent: Entitlement,
+        subscriber: dict[str, Any],
+    ) -> tuple[bool, datetime | None, datetime | None]:
+        """Check if the subscription backing this entitlement is in a billing grace period.
+
+        RC keeps entitlements GRANTED during grace periods (billing failed but not yet lapsed).
+        Returns: (in_grace_period, grace_period_expires_date, billing_issues_detected_at).
+        """
+        if not ent.product_identifier:
+            return False, None, None
+
+        subscriptions: dict[str, Any] = subscriber.get("subscriptions", {})
+        sub = subscriptions.get(ent.product_identifier)
+        if not sub:
+            return False, None, None
+
+        grace_raw = sub.get("grace_period_expires_date")
+        billing_raw = sub.get("billing_issues_detected_at")
+
+        if not grace_raw:
+            return False, None, None
+
+        grace_dt = datetime.fromisoformat(grace_raw.replace("Z", "+00:00"))
+        billing_dt = (
+            datetime.fromisoformat(billing_raw.replace("Z", "+00:00")) if billing_raw else None
+        )
+        now = datetime.now(UTC)
+        in_grace = grace_dt > now
+        return in_grace, grace_dt, billing_dt
 
     def close(self) -> None:
         self._http.close()
