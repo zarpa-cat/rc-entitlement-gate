@@ -33,16 +33,49 @@ _JSON_OPT = Annotated[bool, typer.Option("--json", help="Output JSON")]
 _CACHE_TTL_OPT = Annotated[
     int, typer.Option("--cache-ttl", help="Cache TTL in seconds", show_default=True)
 ]
+_CACHE_BACKEND_OPT = Annotated[
+    str,
+    typer.Option(
+        "--cache-backend",
+        help="Cache backend: 'memory' (default) or 'sqlite' for persistent cache",
+        show_default=True,
+    ),
+]
+_CACHE_DB_OPT = Annotated[
+    str,
+    typer.Option(
+        "--cache-db",
+        envvar="ENTGATE_CACHE_DB",
+        help="SQLite database path (only used when --cache-backend=sqlite)",
+        show_default=True,
+    ),
+]
 
 
-def _make_client(api_key: str | None, cache_ttl: int) -> RCEntitlementClient:
+def _make_client(
+    api_key: str | None,
+    cache_ttl: int,
+    cache_backend: str = "memory",
+    cache_db: str = "entgate_cache.db",
+) -> RCEntitlementClient:
     key = api_key or os.environ.get("REVENUECAT_API_KEY", "")
     if not key:
         typer.echo(
             "Error: REVENUECAT_API_KEY not set. Pass --api-key or set the env var.", err=True
         )
         raise typer.Exit(1)
-    return RCEntitlementClient(api_key=key, cache_ttl=cache_ttl)
+    if cache_backend not in ("memory", "sqlite"):
+        typer.echo(
+            f"Error: --cache-backend must be 'memory' or 'sqlite', got '{cache_backend}'",
+            err=True,
+        )
+        raise typer.Exit(2)
+    return RCEntitlementClient(
+        api_key=key,
+        cache_ttl=cache_ttl,
+        cache_backend=cache_backend,
+        cache_db_path=cache_db,
+    )
 
 
 @app.command("check")
@@ -52,9 +85,11 @@ def cmd_check(
     api_key: _API_KEY_OPT = None,
     json_out: _JSON_OPT = False,
     cache_ttl: _CACHE_TTL_OPT = 60,
+    cache_backend: _CACHE_BACKEND_OPT = "memory",
+    cache_db: _CACHE_DB_OPT = "entgate_cache.db",
 ) -> None:
     """Check if a subscriber has an entitlement. Exits 0 if granted, 1 if denied, 2 on error."""
-    with _make_client(api_key, cache_ttl) as client:
+    with _make_client(api_key, cache_ttl, cache_backend, cache_db) as client:
         result = client.check(subscriber_id, entitlement)
 
     if json_out:
@@ -84,9 +119,11 @@ def cmd_info(
     api_key: _API_KEY_OPT = None,
     json_out: _JSON_OPT = False,
     cache_ttl: _CACHE_TTL_OPT = 60,
+    cache_backend: _CACHE_BACKEND_OPT = "memory",
+    cache_db: _CACHE_DB_OPT = "entgate_cache.db",
 ) -> None:
     """Show subscriber summary (active entitlements, management URL)."""
-    with _make_client(api_key, cache_ttl) as client:
+    with _make_client(api_key, cache_ttl, cache_backend, cache_db) as client:
         info = client.subscriber_info(subscriber_id)
 
     if info is None:
@@ -111,6 +148,8 @@ def cmd_batch(
     api_key: _API_KEY_OPT = None,
     json_out: _JSON_OPT = False,
     cache_ttl: _CACHE_TTL_OPT = 60,
+    cache_backend: _CACHE_BACKEND_OPT = "memory",
+    cache_db: _CACHE_DB_OPT = "entgate_cache.db",
 ) -> None:
     """Check an entitlement for multiple subscribers. Exits 0 if ALL granted."""
     subscriber_ids = [s.strip() for s in ids.split(",") if s.strip()]
@@ -119,7 +158,7 @@ def cmd_batch(
         raise typer.Exit(2)
 
     results = []
-    with _make_client(api_key, cache_ttl) as client:
+    with _make_client(api_key, cache_ttl, cache_backend, cache_db) as client:
         for sid in subscriber_ids:
             results.append(client.check(sid, entitlement))
 

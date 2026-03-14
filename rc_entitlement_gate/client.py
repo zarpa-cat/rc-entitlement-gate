@@ -8,6 +8,10 @@ Phase 2 additions:
 - offline_fallback: serve stale cache when RC API is unreachable
 - expires_soon_threshold_seconds: flag entitlements expiring soon
 - stale_window_seconds: how long to keep expired cache for fallback
+
+Phase 3 additions:
+- cache_backend: "memory" (default) or "sqlite" for persistent cache
+- cache_db_path: path to SQLite database file (only used when cache_backend="sqlite")
 """
 
 from __future__ import annotations
@@ -25,6 +29,9 @@ from .models import (
     EntitlementStatus,
     SubscriberInfo,
 )
+from .sqlite_cache import SQLiteCache
+
+CacheBackend = TTLCache | SQLiteCache
 
 RC_API_BASE = "https://api.revenuecat.com/v1"
 DEFAULT_TIMEOUT = 10.0
@@ -49,13 +56,22 @@ class RCEntitlementClient:
         offline_fallback: bool = False,
         stale_window_seconds: int = 300,
         expires_soon_threshold_seconds: int = 0,
+        cache_backend: str = "memory",
+        cache_db_path: str = "entgate_cache.db",
     ) -> None:
         self.api_key = api_key or os.environ.get("REVENUECAT_API_KEY", "")
         if not self.api_key:
             raise ValueError(
                 "RevenueCat API key required. Pass api_key= or set REVENUECAT_API_KEY env var."
             )
-        self.cache = TTLCache(ttl_seconds=cache_ttl, stale_window_seconds=stale_window_seconds)
+        if cache_backend == "sqlite":
+            self.cache: CacheBackend = SQLiteCache(
+                db_path=cache_db_path,
+                ttl_seconds=cache_ttl,
+                stale_window_seconds=stale_window_seconds,
+            )
+        else:
+            self.cache = TTLCache(ttl_seconds=cache_ttl, stale_window_seconds=stale_window_seconds)
         self.timeout = timeout
         self.base_url = base_url.rstrip("/")
         self.offline_fallback = offline_fallback

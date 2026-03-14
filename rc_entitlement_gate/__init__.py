@@ -2,5 +2,6 @@
 
 from .client import RCEntitlementClient
 from .models import CheckResult, EntitlementStatus
+from .sqlite_cache import SQLiteCache
 
-__all__ = ["RCEntitlementClient", "CheckResult", "EntitlementStatus"]
+__all__ = ["RCEntitlementClient", "CheckResult", "EntitlementStatus", "SQLiteCache"]
