@@ -85,10 +85,14 @@ class SQLiteCache:
         """Return value if within TTL, else None."""
         now = time.time()
         with self._lock:
-            row = self._conn().execute(
-                "SELECT value FROM entgate_cache WHERE key = ? AND expires_at > ?",
-                (key, now),
-            ).fetchone()
+            row = (
+                self._conn()
+                .execute(
+                    "SELECT value FROM entgate_cache WHERE key = ? AND expires_at > ?",
+                    (key, now),
+                )
+                .fetchone()
+            )
         if row is None:
             return None
         return json.loads(row[0])
@@ -97,10 +101,14 @@ class SQLiteCache:
         """Return value even if TTL expired, within stale window. Prunes beyond window."""
         now = time.time()
         with self._lock:
-            row = self._conn().execute(
-                "SELECT value, expires_at FROM entgate_cache WHERE key = ?",
-                (key,),
-            ).fetchone()
+            row = (
+                self._conn()
+                .execute(
+                    "SELECT value, expires_at FROM entgate_cache WHERE key = ?",
+                    (key,),
+                )
+                .fetchone()
+            )
             if row is None:
                 return None
             value_json, expires_at = row
@@ -136,9 +144,7 @@ class SQLiteCache:
     def invalidate(self, key: str) -> bool:
         """Remove key. Returns True if it existed."""
         with self._lock:
-            cursor = self._conn().execute(
-                "DELETE FROM entgate_cache WHERE key = ?", (key,)
-            )
+            cursor = self._conn().execute("DELETE FROM entgate_cache WHERE key = ?", (key,))
             self._conn().commit()
             return cursor.rowcount > 0
 
@@ -151,9 +157,11 @@ class SQLiteCache:
         """Count of non-expired (fresh) entries."""
         now = time.time()
         with self._lock:
-            row = self._conn().execute(
-                "SELECT COUNT(*) FROM entgate_cache WHERE expires_at > ?", (now,)
-            ).fetchone()
+            row = (
+                self._conn()
+                .execute("SELECT COUNT(*) FROM entgate_cache WHERE expires_at > ?", (now,))
+                .fetchone()
+            )
         return row[0] if row else 0
 
     def vacuum(self) -> int:

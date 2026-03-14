@@ -17,12 +17,15 @@ def tmp_cache(tmp_path: Path) -> SQLiteCache:
 
 @pytest.fixture()
 def tmp_cache_no_stale(tmp_path: Path) -> SQLiteCache:
-    return SQLiteCache(db_path=tmp_path / "test_cache_no_stale.db", ttl_seconds=2, stale_window_seconds=0)
+    return SQLiteCache(
+        db_path=tmp_path / "test_cache_no_stale.db", ttl_seconds=2, stale_window_seconds=0
+    )
 
 
 # ------------------------------------------------------------------
 # Basic get/set
 # ------------------------------------------------------------------
+
 
 def test_set_and_get(tmp_cache: SQLiteCache) -> None:
     tmp_cache.set("key1", {"foo": "bar"})
@@ -49,6 +52,7 @@ def test_set_overwrites(tmp_cache: SQLiteCache) -> None:
 # ------------------------------------------------------------------
 # Stale reads
 # ------------------------------------------------------------------
+
 
 def test_get_stale_returns_fresh_normally(tmp_cache: SQLiteCache) -> None:
     tmp_cache.set("k", "v")
@@ -78,6 +82,7 @@ def test_get_stale_no_stale_window(tmp_cache_no_stale: SQLiteCache) -> None:
 # Invalidate
 # ------------------------------------------------------------------
 
+
 def test_invalidate_existing(tmp_cache: SQLiteCache) -> None:
     tmp_cache.set("k", "v")
     existed = tmp_cache.invalidate("k")
@@ -92,6 +97,7 @@ def test_invalidate_missing(tmp_cache: SQLiteCache) -> None:
 # ------------------------------------------------------------------
 # Size and clear
 # ------------------------------------------------------------------
+
 
 def test_size_counts_fresh_only(tmp_cache: SQLiteCache) -> None:
     tmp_cache.set("k1", "v1")
@@ -113,6 +119,7 @@ def test_clear(tmp_cache: SQLiteCache) -> None:
 # Vacuum
 # ------------------------------------------------------------------
 
+
 def test_vacuum_prunes_expired(tmp_cache: SQLiteCache) -> None:
     # ttl=2, stale_window=5 → entries pruneable after 7s from creation
     tmp_cache.set("k1", "v1")
@@ -125,6 +132,7 @@ def test_vacuum_prunes_expired(tmp_cache: SQLiteCache) -> None:
 # ------------------------------------------------------------------
 # Persistence across instances
 # ------------------------------------------------------------------
+
 
 def test_persists_across_instances(tmp_path: Path) -> None:
     db = tmp_path / "persist.db"
@@ -141,6 +149,7 @@ def test_persists_across_instances(tmp_path: Path) -> None:
 # cache_key helper
 # ------------------------------------------------------------------
 
+
 def test_cache_key(tmp_cache: SQLiteCache) -> None:
     key = tmp_cache._cache_key("user_42")
     assert key == "sub:user_42"
@@ -149,6 +158,7 @@ def test_cache_key(tmp_cache: SQLiteCache) -> None:
 # ------------------------------------------------------------------
 # Complex values (dicts, lists)
 # ------------------------------------------------------------------
+
 
 def test_stores_nested_dict(tmp_cache: SQLiteCache) -> None:
     data = {"subscriber": {"entitlements": {"premium": {"expires_date": "2027-01-01T00:00:00Z"}}}}
